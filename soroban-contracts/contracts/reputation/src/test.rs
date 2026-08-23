@@ -836,3 +836,40 @@ fn pause_views_report_the_active_window() {
     assert_eq!(state.expires_at, 8_200);
     assert!(contract.is_paused(&SCOPE_ATTESTATION));
 }
+
+// ===========================================================================
+// Contract events — structured contract events (#45)
+// ===========================================================================
+
+#[test]
+fn submit_attestation_emits_one_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, client, worker) = setup();
+    let before = env.events().all().events().len();
+    contract.submit_attestation(&1, &client, &worker, &5, &dummy_hash(&env));
+    let after = env.events().all().events().len();
+    assert_eq!(
+        after - before,
+        1,
+        "submit_attestation must emit exactly one event"
+    );
+}
+
+#[test]
+fn failed_attestation_emits_no_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, client, worker) = setup();
+    // Submit once to make the appointment reviewed
+    contract.submit_attestation(&1, &client, &worker, &5, &dummy_hash(&env));
+
+    // Double-review should fail and emit no event
+    let result = contract.try_submit_attestation(&1, &client, &worker, &4, &dummy_hash(&env));
+    assert_eq!(result, Err(Ok(Error::AlreadyReviewed)));
+    assert_eq!(
+        env.events().all().events().len(),
+        0,
+        "failed operation must emit no event"
+    );
+}

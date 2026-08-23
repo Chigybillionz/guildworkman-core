@@ -10,11 +10,60 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Vec,
 };
 
+use soroban_sdk::contractevent;
+
 use guildworkman_governance_guard as governance;
 pub use guildworkman_governance_guard::{
     PauseState, PendingRotation, PendingUpgrade, ALL_SCOPES, MAX_PAUSE_DURATION,
     MAX_PAUSE_REASON_LEN, SCOPE_INTAKE,
 };
+
+// ---------------------------------------------------------------------------
+// Contract events
+// ---------------------------------------------------------------------------
+
+/// SEP-41-compatible transfer event. Topics: `["loyalty", "transfer", from, to]`;
+/// data carries the amount.
+#[contractevent(topics = ["loyalty", "transfer"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Transfer {
+    #[topic]
+    pub from: Address,
+    #[topic]
+    pub to: Address,
+    pub amount: i128,
+}
+
+/// SEP-41-compatible burn event. Topics: `["loyalty", "burn", from]`;
+/// data carries the amount.
+#[contractevent(topics = ["loyalty", "burn"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Burn {
+    #[topic]
+    pub from: Address,
+    pub amount: i128,
+}
+
+/// Emitted on `mint`. Topics: `["loyalty", "mint", to]`;
+/// data carries the amount.
+#[contractevent(topics = ["loyalty", "mint"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Mint {
+    #[topic]
+    pub to: Address,
+    pub amount: i128,
+}
+
+/// Emitted when the minter is rotated. Topics: `["loyalty",
+/// "minter_rotated", old_minter, new_minter]`.
+#[contractevent(topics = ["loyalty", "minter_rotated"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MinterRotated {
+    #[topic]
+    pub old_minter: Address,
+    #[topic]
+    pub new_minter: Address,
+}
 
 /// Bump when this contract's storage layout actually changes shape and
 /// needs a real transformation in `migrate`. There's no such change yet.
@@ -300,7 +349,19 @@ impl LoyaltyToken {
     pub fn set_minter(env: Env, new_minter: Address) -> Result<(), Error> {
         let admin = Self::require_admin(&env)?;
         admin.require_auth();
+        let old_minter: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Minter)
+            .ok_or(Error::NotInitialized)?;
         env.storage().instance().set(&DataKey::Minter, &new_minter);
+
+        MinterRotated {
+            old_minter,
+            new_minter,
+        }
+        .publish(&env);
+
         Ok(())
     }
 
@@ -322,10 +383,13 @@ impl LoyaltyToken {
             .ok_or(Error::NotInitialized)?;
         minter.require_auth();
 
-        Self::receive_balance(&env, to, amount);
+        Self::receive_balance(&env, to.clone(), amount);
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_LIFETIME_THRESHOLD, INSTANCE_BUMP_AMOUNT);
+
+        Mint { to, amount }.publish(&env);
+
         Ok(())
     }
 
@@ -359,8 +423,11 @@ impl LoyaltyToken {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        Self::spend_balance(&env, from, amount)?;
-        Self::receive_balance(&env, to, amount);
+        Self::spend_balance(&env, from.clone(), amount)?;
+        Self::receive_balance(&env, to.clone(), amount);
+
+        Transfer { from, to, amount }.publish(&env);
+
         Ok(())
     }
 
@@ -376,8 +443,11 @@ impl LoyaltyToken {
             return Err(Error::InvalidAmount);
         }
         Self::spend_allowance(&env, from.clone(), spender, amount)?;
-        Self::spend_balance(&env, from, amount)?;
-        Self::receive_balance(&env, to, amount);
+        Self::spend_balance(&env, from.clone(), amount)?;
+        Self::receive_balance(&env, to.clone(), amount);
+
+        Transfer { from, to, amount }.publish(&env);
+
         Ok(())
     }
 
@@ -389,7 +459,10 @@ impl LoyaltyToken {
         if amount <= 0 {
             return Err(Error::InvalidAmount);
         }
-        Self::spend_balance(&env, from, amount)?;
+        Self::spend_balance(&env, from.clone(), amount)?;
+
+        Burn { from, amount }.publish(&env);
+
         Ok(())
     }
 

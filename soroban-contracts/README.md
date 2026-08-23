@@ -25,6 +25,7 @@ holding money, recording reviews, issuing rewards — on-chain.
 - [Architecture](#architecture)
 - [Upgrade governance](#upgrade-governance)
 - [Emergency circuit breaker](#emergency-circuit-breaker)
+- [Contract Events](#contract-events)
 - [Prerequisites](#prerequisites)
 - [Build](#build)
 - [Test](#test)
@@ -426,6 +427,70 @@ SIGNER=my-key ./scripts/broadcast-pause.sh unpause 1
 Note each contract has its **own** governance signer set; if they differ, run
 the script once per key with only the matching ids exported.
 
+## Contract Events
+
+Every state-changing entry point across the three core contracts (escrow,
+reputation, loyalty-token) now emits exactly one event on success. A failed
+operation that returns an `Error` emits **no event**. Topic tuples are chosen
+so an off-chain indexer can filter by `appointment_id`, `worker`, or `client`
+address without scanning every ledger.
+
+Topics are ordered: the two prefix symbols first, then each `#[topic]` field
+in declaration order. Data is a **`Map<Symbol, Val>` keyed by field name**
+(`data_format` defaults to `"map"`), so field *names* are part of the
+contract but their order is not — index by key, not by position.
+
+### Escrow events
+
+| Event | Topics (in order) | Data fields |
+|---|---|---|
+| `AppointmentCreated` | `"escrow"`, `"created"`, `appointment_id`, `client`, `worker` | `amount` |
+| `AppointmentCompleted` | `"escrow"`, `"completed"`, `appointment_id`, `client` | `worker` |
+| `AppointmentCancelled` | `"escrow"`, `"cancelled"`, `appointment_id`, `client` | `amount` |
+| `AppointmentDisputed` | `"escrow"`, `"disputed"`, `appointment_id`, `caller` | `client`, `worker` |
+| `AppointmentResolved` | `"escrow"`, `"resolved"`, `appointment_id`, `recipient` | `amount`, `refund_to_client` |
+| `MilestoneCreated` | `"escrow"`, `"milestone_created"`, `escrow_id`, `client` | `index`, `amount`, `deadline` |
+| `MilestoneApproved` | `"escrow"`, `"milestone_approved"`, `escrow_id`, `client` | `milestone_index` |
+| `MilestoneReleased` | `"escrow"`, `"milestone_released"`, `escrow_id`, `worker` | `milestone_index`, `amount` |
+| `MilestoneDisputed` | `"escrow"`, `"milestone_disputed"`, `escrow_id`, `caller` | `milestone_index` |
+| `MilestoneResolved` | `"escrow"`, `"milestone_resolved"`, `escrow_id`, `recipient` | `milestone_index`, `amount` |
+| `MilestoneEscrowCreated` | `"escrow"`, `"milestone_escrow_created"`, `escrow_id`, `client`, `worker` | `total_amount` |
+
+### Reputation events
+
+| Event | Topics (in order) | Data fields |
+|---|---|---|
+| `AttestationSubmitted` | `"rep"`, `"attested"`, `appointment_id`, `client`, `worker` | `rating` |
+
+### Loyalty token events
+
+| Event | Topics (in order) | Data fields |
+|---|---|---|
+| `Mint` | `"loyalty"`, `"mint"`, `to` | `amount` |
+| `Transfer` | `"loyalty"`, `"transfer"`, `from`, `to` | `amount` |
+| `Burn` | `"loyalty"`, `"burn"`, `from` | `amount` |
+| `MinterRotated` | `"loyalty"`, `"minter_rotated"`, `old_minter`, `new_minter` | _(none)_ |
+
+`Transfer` and `Burn` follow SEP-41 conventions so standard wallet and
+indexer tooling recognizes them. `Mint` uses the same prefix pair for
+consistency but is not defined by SEP-41.
+
+### Indexer filtering examples
+
+An off-chain indexer can filter by any topic position:
+
+- **By appointment:** filter topics[2] == `appointment_id` on escrow/reputation
+  events.
+- **By worker:** filter topics[3] or topics[4] == `worker` address on escrow
+  events; topics[3] on `AttestationSubmitted`.
+- **By client:** filter topics[2] or topics[3] == `client` address on escrow
+  events; topics[2] on `AttestationSubmitted`.
+- **By token holder:** filter topics[2] == `to`/`from` on loyalty-token events.
+
+All event shapes are pinned by assertion in each contract's test suite, so
+the topic layout and data fields cannot drift from this documentation without
+a test failing.
+
 ## Prerequisites
 
 - Rust with the `wasm32v1-none` target: `rustup target add wasm32v1-none`
@@ -452,30 +517,38 @@ cargo test --workspace
 Each contract has unit tests under `contracts/<name>/src/test.rs` using
 `soroban-sdk`'s `testutils`. Current coverage:
 
-- **escrow** (5 tests): happy-path completion pays the worker and drains the
+- **escrow** (66 tests): happy-path completion pays the worker and drains the
   contract's balance; cancellation refunds the client; a raised dispute
   resolved in the worker's favor pays the worker; creating a duplicate
   `appointment_id` is rejected; confirming an already-completed appointment
-  is rejected.
-- **reputation** (3 tests): submitting reviews updates the count/sum
+  is rejected; milestone creation, approval, release, dispute, and resolution;
+  milestone escrow creation and fund release; hot-path cost measurements;
+  pause/unpause lifecycle and scoped guard behavior; and structured contract
+  event assertions for every state-changing entry point.
+- **reputation** (45 tests): submitting reviews updates the count/sum
   aggregate and average correctly; reviewing the same `appointment_id` twice
-  is rejected; a rating outside 1-5 is rejected.
-- **loyalty-token** (6 tests): mint increases balance; transfer moves balance
+  is rejected; a rating outside 1-5 is rejected; stake weighting and time
+  decay; rate limiting; admin stake management; pause/unpause lifecycle;
+  structured contract event assertions; and adversarial edge cases.
+- **loyalty-token** (27 tests): mint increases balance; transfer moves balance
   between accounts; transferring more than the balance fails; approve +
   transfer_from spends down the allowance correctly; burn reduces balance;
-  the admin can rotate the minter and the new minter can mint.
-- **loyalty-emissions** (24 tests): linear vesting reports the right amount at
+  the admin can rotate the minter and the new minter can mint; pause/unpause
+  lifecycle; structured contract event assertions for mint, transfer, burn,
+  and minter rotation; and adversarial edge cases.
+- **loyalty-emissions** (43 tests): linear vesting reports the right amount at
   the start, midpoint, and end of a stream and stays capped afterwards; a
   cliff blocks vesting until it's reached; `claim` mints the vested delta and
   incremental claims only mint what's newly vested; per-account and global
   rate limits clamp a claim to the remaining window budget and open a fresh
   budget the next window; the `claimable` view reflects both vesting and rate
   limits; `reclaim` returns the unclaimed remainder only after the deadline and
-  blocks further claims; and adversarial paths — double-init, bad config, bad
+  blocks further claims; pause/unpause lifecycle; structured contract event
+  assertions; and adversarial paths — double-init, bad config, bad
   schedule params, reclaim-before-vesting-end, double-claim, double-reclaim,
   claiming a missing/reclaimed schedule, and looping claims across many windows
   never mints more than a schedule's `total`.
-- **dispute-resolution** (27 tests): the full commit → reveal → resolve →
+- **dispute-resolution** (28 tests): the full commit → reveal → resolve →
   withdraw lifecycle pays a plaintiff- or defendant-majority jury out of the
   losers' stakes; a no-show who committed but never revealed is slashed and
   their stake flows to the winners; a tie or a below-quorum turnout refunds

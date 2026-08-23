@@ -9,11 +9,32 @@ use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Vec,
 };
 
+use soroban_sdk::contractevent;
+
 use guildworkman_governance_guard as governance;
 pub use guildworkman_governance_guard::{
     PauseState, PendingRotation, PendingUpgrade, ALL_SCOPES, MAX_PAUSE_DURATION,
     MAX_PAUSE_REASON_LEN, SCOPE_ATTESTATION,
 };
+
+// ---------------------------------------------------------------------------
+// Contract events
+// ---------------------------------------------------------------------------
+
+/// Emitted when a client submits an attestation for a worker. Topics:
+/// `["rep", "attested", appointment_id, client, worker]`; data carries the
+/// rating.
+#[contractevent(topics = ["rep", "attested"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AttestationSubmitted {
+    #[topic]
+    pub appointment_id: u64,
+    #[topic]
+    pub client: Address,
+    #[topic]
+    pub worker: Address,
+    pub rating: u32,
+}
 
 /// Bump when this contract's storage layout actually changes shape and
 /// needs a real transformation in `migrate`. There's no such change yet —
@@ -523,6 +544,14 @@ impl ReputationContract {
         env.storage()
             .temporary()
             .extend_ttl(&global_key, window_ttl, window_ttl);
+
+        AttestationSubmitted {
+            appointment_id,
+            client,
+            worker,
+            rating,
+        }
+        .publish(&env);
 
         Ok(())
     }

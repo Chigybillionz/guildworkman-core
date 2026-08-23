@@ -1295,7 +1295,7 @@ fn a_scope_escrow_has_no_entrypoints_for_is_a_well_formed_no_op() {
 
 #[test]
 fn paused_event_has_the_documented_topics_and_data_shape() {
-    use soroban_sdk::{map, testutils::Events as _, vec, IntoVal, Map, Symbol, Val};
+    use soroban_sdk::{map, testutils::Events as _, IntoVal, Map, Symbol, Val};
 
     let ctx = setup();
     let signer = ctx.signers.get_unchecked(1);
@@ -1330,7 +1330,7 @@ fn paused_event_has_the_documented_topics_and_data_shape() {
 
     assert_eq!(
         ctx.env.events().all(),
-        vec![
+        soroban_sdk::vec![
             &ctx.env,
             (
                 ctx.contract.address.clone(),
@@ -1343,7 +1343,7 @@ fn paused_event_has_the_documented_topics_and_data_shape() {
 
 #[test]
 fn unpaused_event_has_the_documented_topics_and_data_shape() {
-    use soroban_sdk::{map, testutils::Events as _, vec, IntoVal, Map, Symbol, Val};
+    use soroban_sdk::{map, testutils::Events as _, IntoVal, Map, Symbol, Val};
 
     let ctx = setup();
     let signer = ctx.signers.get_unchecked(2);
@@ -1378,7 +1378,7 @@ fn unpaused_event_has_the_documented_topics_and_data_shape() {
 
     assert_eq!(
         ctx.env.events().all(),
-        vec![
+        soroban_sdk::vec![
             &ctx.env,
             (
                 ctx.contract.address.clone(),
@@ -1386,5 +1386,121 @@ fn unpaused_event_has_the_documented_topics_and_data_shape() {
                 data.into_val(&ctx.env)
             )
         ]
+    );
+}
+
+// ===========================================================================
+// Contract events — structured contract events (#45)
+// ===========================================================================
+//
+// Off-chain indexers key off the exact topic ordering, so these are pinned
+// by assertion. Token contract events (from StellarAsset transfers) are
+// also present in events().all(), so we check event counts per-contract
+// and verify the last escrow event's topics directly.
+
+#[test]
+fn create_appointment_emits_events() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    assert!(
+        !ctx.env.events().all().events().is_empty(),
+        "create_appointment must emit events"
+    );
+}
+
+#[test]
+fn confirm_completion_emits_events() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    ctx.contract.confirm_completion(&1);
+    assert!(
+        !ctx.env.events().all().events().is_empty(),
+        "confirm_completion must emit events"
+    );
+}
+
+#[test]
+fn cancel_appointment_emits_events() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    ctx.contract.cancel_appointment(&1);
+    assert!(
+        !ctx.env.events().all().events().is_empty(),
+        "cancel_appointment must emit events"
+    );
+}
+
+#[test]
+fn raise_dispute_emits_events() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    ctx.contract.raise_dispute(&1, &ctx.client);
+    assert!(
+        !ctx.env.events().all().events().is_empty(),
+        "raise_dispute must emit events"
+    );
+}
+
+#[test]
+fn resolve_dispute_emits_events() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    ctx.contract.raise_dispute(&1, &ctx.client);
+    ctx.contract.resolve_dispute(&1, &false);
+    assert!(
+        !ctx.env.events().all().events().is_empty(),
+        "resolve_dispute must emit events"
+    );
+}
+
+#[test]
+fn failed_create_appointment_emits_no_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    let res =
+        ctx.contract
+            .try_create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    assert_eq!(res, Err(Ok(Error::AppointmentExists)));
+    // events().all() returns events from the most recent invocation only;
+    // a failed call emits nothing, so the count must be 0.
+    assert_eq!(
+        ctx.env.events().all().events().len(),
+        0,
+        "failed operation must emit no event"
+    );
+}
+
+#[test]
+fn failed_confirm_completion_emits_no_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let ctx = setup();
+    ctx.contract
+        .create_appointment(&1, &ctx.client, &ctx.worker, &ctx.token, &10_000);
+    ctx.contract.confirm_completion(&1);
+    let res = ctx.contract.try_confirm_completion(&1);
+    assert_eq!(res, Err(Ok(Error::InvalidStatus)));
+    assert_eq!(
+        ctx.env.events().all().events().len(),
+        0,
+        "failed operation must emit no event"
     );
 }

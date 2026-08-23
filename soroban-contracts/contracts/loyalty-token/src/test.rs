@@ -381,3 +381,99 @@ fn the_pause_reason_is_readable_from_chain_state() {
 
     assert_eq!(contract.get_pause_state().unwrap().reason, why);
 }
+
+// ===========================================================================
+// Contract events — structured contract events (#45)
+// ===========================================================================
+//
+// We check that each state-changing entry point emits exactly one event
+// and that failed operations emit none. Topic ordering and data shapes
+// are documented in the README (contract-level) and pinned by the
+// #[contractevent] derive macros on the event structs in lib.rs.
+
+#[test]
+fn mint_emits_one_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    let before = env.events().all().events().len();
+    contract.mint(&user, &1_000);
+    let after = env.events().all().events().len();
+    assert_eq!(after - before, 1, "mint must emit exactly one event");
+}
+
+#[test]
+fn transfer_emits_one_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    let other = Address::generate(&env);
+    contract.mint(&user, &500);
+    // events().all() only returns events from the most recent invocation
+    contract.transfer(&user, &other, &200);
+    assert_eq!(
+        env.events().all().events().len(),
+        1,
+        "transfer must emit exactly one event"
+    );
+}
+
+#[test]
+fn burn_emits_one_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    contract.mint(&user, &400);
+    // events().all() only returns events from the most recent invocation
+    contract.burn(&user, &150);
+    assert_eq!(
+        env.events().all().events().len(),
+        1,
+        "burn must emit exactly one event"
+    );
+}
+
+#[test]
+fn set_minter_emits_one_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, _user) = setup();
+    let new_minter = Address::generate(&env);
+    contract.set_minter(&new_minter);
+    assert_eq!(
+        env.events().all().events().len(),
+        1,
+        "set_minter must emit exactly one event"
+    );
+}
+
+#[test]
+fn failed_mint_emits_no_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    let count_before = env.events().all().events().len();
+    let res = contract.try_mint(&user, &0);
+    assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+    let count_after = env.events().all().events().len();
+    assert_eq!(
+        count_before, count_after,
+        "failed operation must emit no event"
+    );
+}
+
+#[test]
+fn failed_transfer_emits_no_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    let other = Address::generate(&env);
+    contract.mint(&user, &100);
+    let res = contract.try_transfer(&user, &other, &200);
+    assert_eq!(res, Err(Ok(Error::InsufficientBalance)));
+    assert_eq!(
+        env.events().all().events().len(),
+        0,
+        "failed operation must emit no event"
+    );
+}
