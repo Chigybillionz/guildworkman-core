@@ -7,10 +7,13 @@ import com.guildworkman.api.dto.responses.AcceptAppointmentResponse;
 import com.guildworkman.api.dto.responses.UpdateAppointmentResponse;
 import com.guildworkman.api.dto.responses.ViewAllAppointmentsResponse;
 import com.guildworkman.api.exceptions.AppointmentNotFoundException;
+import com.guildworkman.api.data.constants.NotificationType;
 import com.guildworkman.api.data.models.Appointment;
+import com.guildworkman.api.data.models.Client;
 import com.guildworkman.api.data.models.SkilledWorker;
 import com.guildworkman.api.data.constants.AppointmentStatus;
 import com.guildworkman.api.data.repository.AppointmentRepository;
+import com.guildworkman.api.data.repository.ClientRepository;
 import com.guildworkman.api.data.repository.SkilledWorkerRepository;
 import com.guildworkman.api.exceptions.GuildWorkmanException;
 import com.guildworkman.api.exceptions.UserNotFoundException;
@@ -18,6 +21,7 @@ import com.guildworkman.api.booking.model.SlotReservation;
 import com.guildworkman.api.booking.service.SlotReservationBooker;
 import com.guildworkman.api.booking.service.SlotReservationService;
 import com.guildworkman.api.services.ServiceUtils.AppointmentService;
+import com.guildworkman.api.services.ServiceUtils.NotificationService;
 import lombok.AllArgsConstructor;
 import org.modelmapper.ModelMapper;
 import org.springframework.stereotype.Service;
@@ -46,8 +50,10 @@ public class AppointmentServiceImpl implements AppointmentService {
     private final AppointmentRepository appointmentRepository;
     private  final ModelMapper modelMapper;
     private final SkilledWorkerRepository skilledWorkerRepository;
+    private final ClientRepository clientRepository;
     private final SlotReservationBooker slotReservationBooker;
     private final SlotReservationService slotReservationService;
+    private final NotificationService notificationService;
 
 
 //    @Autowired
@@ -68,6 +74,15 @@ public class AppointmentServiceImpl implements AppointmentService {
         SkilledWorker skilledWorker = resolveSkilledWorker(bookAppointmentRequest.getSkilledWorkerId());
         appointment.setSkilledWorker(skilledWorker);
         appointment.setAmount(bookAppointmentRequest.getAmount());
+
+        // Same reasoning as the worker above: ModelMapper maps `clientId` onto a
+        // transient Client with only its id set (everything else null), which
+        // would either fail to persist or silently notify with a blank name/email.
+        // Resolve the managed entity instead.
+        Client client = clientRepository.findById(bookAppointmentRequest.getClientId())
+                .orElseThrow(() -> new UserNotFoundException(
+                        "Client not found: " + bookAppointmentRequest.getClientId()));
+        appointment.setClient(client);
 
         // Claim the slot BEFORE the appointment exists. This one-step endpoint
         // races just as hard as the two-step reserve/confirm flow does, so it
@@ -92,6 +107,9 @@ public class AppointmentServiceImpl implements AppointmentService {
         if (reservation != null) {
             slotReservationBooker.linkAppointment(reservation, appointment.getId());
         }
+
+        notificationService.notifyAppointmentEvent(appointment, NotificationType.APPOINTMENT_BOOKED);
+
         return appointment;
 
     }
@@ -136,11 +154,13 @@ public class AppointmentServiceImpl implements AppointmentService {
 
 
     @Override
+    @Transactional
     public void cancelAppointment(Long id) {
         Appointment appointment = appointmentRepository.findById(id)
                 .orElseThrow(() -> new AppointmentNotFoundException("Appointment not found"));
         appointment.setStatus(AppointmentStatus.CANCELLED);
         appointmentRepository.save(appointment);
+        notificationService.notifyAppointmentEvent(appointment, NotificationType.APPOINTMENT_CANCELLED);
 //        CancelAppointmentResponse response = new CancelAppointmentResponse();
 //        modelMapper.map(response, Appointment.class);
 //        response.setMessage("Appointment cancelled successfully");
@@ -183,6 +203,9 @@ public class AppointmentServiceImpl implements AppointmentService {
         }
         appointmentRepository.save(appointment);
 
+        notificationService.notifyAppointmentEvent(appointment,
+                NotificationType.fromAppointmentStatus(appointment.getStatus()));
+
         UpdateAppointmentResponse response = new UpdateAppointmentResponse();
         response.setId(appointment.getId());
         response.setMessage("Appointment Updated");
@@ -190,10 +213,12 @@ public class AppointmentServiceImpl implements AppointmentService {
     }
 
     @Override
+    @Transactional
     public void deleteAppointment(Long id) {
         Appointment appointment = appointmentRepository.findById(id)
                 .orElseThrow(()-> new AppointmentNotFoundException("No appointment found"));
         appointmentRepository.delete(appointment);
+        notificationService.notifyAppointmentEvent(appointment, NotificationType.APPOINTMENT_DELETED);
 
     }
 
@@ -221,6 +246,7 @@ public class AppointmentServiceImpl implements AppointmentService {
     }
 
     @Override
+    @Transactional
     public AcceptAppointmentResponse acceptAppointment(AcceptAppointmentRequest request) {
         Appointment appointment = appointmentRepository.findById(request.getAppointmentId())
                 .orElseThrow(()-> new GuildWorkmanException("appointment not found"));
@@ -228,6 +254,7 @@ public class AppointmentServiceImpl implements AppointmentService {
 //        appointment.setSkilledWorker(request.getSkilledWorker());
         appointment.setStatus(AppointmentStatus.ACCEPTED);
         appointmentRepository.save(appointment);
+        notificationService.notifyAppointmentEvent(appointment, NotificationType.APPOINTMENT_ACCEPTED);
         AcceptAppointmentResponse response = new AcceptAppointmentResponse();
         response.setStatus(request.getStatus());
         response.setClientId(request.getId());

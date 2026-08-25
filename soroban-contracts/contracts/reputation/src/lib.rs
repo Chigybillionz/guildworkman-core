@@ -4,6 +4,26 @@
 //!
 //! Computes time-decayed, stake-weighted scores from signed attestations
 //! while resisting Sybil, collusion, and self-dealing attacks.
+//!
+//! ## Settlement router gating
+//!
+//! `submit_attestation` accepts *any* `appointment_id` on its own — nothing
+//! in this contract proves the appointment existed in `escrow`, was
+//! funded, or was completed. `set_router` (admin-only) closes that gap:
+//! once a router address is configured, `submit_attestation` additionally
+//! requires `router.require_auth()` alongside the client's own
+//! authorization. A contract address can only ever satisfy
+//! `require_auth()` for *itself*, and only by directly executing the call —
+//! there is no key an externally-owned account could sign with to forge
+//! it — so once `Router` is set to a deployed
+//! `guildworkman-settlement-router`, the only way this function can
+//! succeed is a call arriving from that router's own code, which by
+//! construction only happens after it has confirmed the appointment
+//! on-chain. See that crate's docs for the full settlement flow.
+//!
+//! `Router` defaults to unset, which preserves this contract's original,
+//! client-authorized-only behavior — the gate is opt-in per deployment
+//! until an operator finishes wiring a router in.
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, Address, BytesN, Env, String, Vec,
@@ -112,6 +132,9 @@ pub enum DataKey {
     // Instance (singletons)
     Admin,
     Config,
+    /// Optional settlement-router address (`guildworkman-settlement-router`).
+    /// `None` until an admin calls `set_router`. See `submit_attestation`.
+    Router,
     // Persistent (entity data)
     Reviewed(u64),
     Review(Address, u32),
@@ -401,6 +424,25 @@ impl ReputationContract {
         Ok(())
     }
 
+    /// Admin-only: point this contract at a deployed settlement router.
+    /// Once set, `submit_attestation` requires that router's authorization
+    /// in addition to the client's — see the crate-level "Settlement
+    /// router gating" notes. Passing a fresh address here is also how a
+    /// router upgrade or redeploy gets wired in; there is no "unset" call,
+    /// since a reputation contract that has ever required router
+    /// authorization should not silently fall back to accepting
+    /// unverified attestations again.
+    pub fn set_router(env: Env, router: Address) -> Result<(), Error> {
+        Self::require_admin(&env)?;
+        env.storage().instance().set(&DataKey::Router, &router);
+        Self::bump_instance(&env);
+        Ok(())
+    }
+
+    pub fn get_router(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::Router)
+    }
+
     pub fn set_stake(env: Env, user: Address, stake: u64) -> Result<(), Error> {
         Self::require_admin(&env)?;
         let key = DataKey::Stake(user);
@@ -430,6 +472,15 @@ impl ReputationContract {
 
         // 1. Authorization (signed attestation via Soroban auth).
         client.require_auth();
+
+        // 1b. If a settlement router is configured, this call must also be
+        // arriving from that router's own code — see the crate-level
+        // "Settlement router gating" notes for why this closes off
+        // submitting an attestation for an appointment that was never
+        // verified against escrow.
+        if let Some(router) = Self::get_router(env.clone()) {
+            router.require_auth();
+        }
 
         // 2. Self-dealing prevention.
         if client == worker {

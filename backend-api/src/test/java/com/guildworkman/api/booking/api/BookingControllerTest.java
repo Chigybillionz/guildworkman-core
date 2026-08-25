@@ -10,11 +10,13 @@ import com.guildworkman.api.data.models.SkilledWorker;
 import com.guildworkman.api.data.repository.ClientRepository;
 import com.guildworkman.api.data.repository.SkilledWorkerRepository;
 import com.guildworkman.api.handler.ProblemDetails;
+import com.guildworkman.api.services.ServiceUtils.MailService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
@@ -64,6 +66,11 @@ class BookingControllerTest {
 
     @Autowired
     private SkilledWorkerRepository skilledWorkers;
+
+    // Confirming a reservation now fans out a notification email; mocked so
+    // this never makes a real call to the mail provider.
+    @MockBean
+    private MailService mailService;
 
     private SkilledWorker worker;
     private Client client;

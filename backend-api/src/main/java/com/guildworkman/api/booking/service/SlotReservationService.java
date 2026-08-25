@@ -9,6 +9,7 @@ import com.guildworkman.api.booking.model.SlotReservation;
 import com.guildworkman.api.booking.model.SlotReservationStatus;
 import com.guildworkman.api.booking.repository.SlotReservationRepository;
 import com.guildworkman.api.data.constants.AppointmentStatus;
+import com.guildworkman.api.data.constants.NotificationType;
 import com.guildworkman.api.data.models.Appointment;
 import com.guildworkman.api.data.models.Client;
 import com.guildworkman.api.data.models.SkilledWorker;
@@ -17,6 +18,7 @@ import com.guildworkman.api.data.repository.ClientRepository;
 import com.guildworkman.api.data.repository.SkilledWorkerRepository;
 import com.guildworkman.api.exceptions.GuildWorkmanException;
 import com.guildworkman.api.exceptions.UserNotFoundException;
+import com.guildworkman.api.services.ServiceUtils.NotificationService;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +73,7 @@ public class SlotReservationService {
     private final ClientRepository clients;
     private final SkilledWorkerRepository skilledWorkers;
     private final SlotReservationProperties properties;
+    private final NotificationService notificationService;
 
     /** @param replayed true when {@code reservation} already existed for this idempotency key. */
     public record ReservationOutcome(SlotReservation reservation, boolean replayed) {
@@ -158,6 +161,8 @@ public class SlotReservationService {
         reservation.setConfirmedAt(now);
         reservation.setAppointmentId(appointment.getId());
         reservations.save(reservation);
+
+        notificationService.notifyAppointmentEvent(appointment, NotificationType.APPOINTMENT_BOOKED);
 
         log.info("Slot reservation id={} confirmed as appointment id={}", reservationId, appointment.getId());
         return reservation;

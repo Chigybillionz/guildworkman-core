@@ -102,6 +102,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 "Appointment not found", exception.getMessage());
     }
 
+    @ExceptionHandler(NotificationNotFoundException.class)
+    public ResponseEntity<ProblemDetail> handleNotificationNotFound(NotificationNotFoundException exception) {
+        return respond(HttpStatus.NOT_FOUND, "notification-not-found",
+                "Notification not found", exception.getMessage());
+    }
+
     @ExceptionHandler(ReservationNotFoundException.class)
     public ResponseEntity<ProblemDetail> handleReservationNotFound(ReservationNotFoundException exception) {
         return respond(HttpStatus.NOT_FOUND, "reservation-not-found",

@@ -7,6 +7,7 @@ members = [
     "contracts/loyalty-emissions",
     "contracts/governance-guard",
     "contracts/dispute-resolution",
+    "contracts/settlement-router",
 ]
 
 [workspace.dependencies]

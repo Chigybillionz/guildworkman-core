@@ -7,6 +7,7 @@ import com.guildworkman.api.booking.repository.SlotReservationRepository;
 import com.guildworkman.api.data.repository.AppointmentRepository;
 import com.guildworkman.api.data.repository.ClientRepository;
 import com.guildworkman.api.data.repository.SkilledWorkerRepository;
+import com.guildworkman.api.services.ServiceUtils.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -50,6 +51,8 @@ class SlotReservationServiceTest {
     private SkilledWorkerRepository skilledWorkers;
     @Mock
     private SlotReservationProperties properties;
+    @Mock
+    private NotificationService notificationService;
 
     @InjectMocks
     private SlotReservationService service;

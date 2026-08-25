@@ -22,10 +22,12 @@ import com.guildworkman.api.dto.requests.BookAppointmentRequest;
 import com.guildworkman.api.dto.requests.UpdateAppointmentRequest;
 import com.guildworkman.api.exceptions.UserNotFoundException;
 import com.guildworkman.api.services.ServiceUtils.ClientService;
+import com.guildworkman.api.services.ServiceUtils.MailService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 
 import java.math.BigDecimal;
 import java.time.Duration;
@@ -82,6 +84,12 @@ class SlotReservationIntegrationTest {
 
     @Autowired
     private ClientService clientService;
+
+    // Booking/confirming an appointment now fans out a notification email.
+    // Mocked so these tests never make a real call to the mail provider,
+    // mirroring how EscrowOrchestrationIntegrationTest mocks SorobanRpcClient.
+    @MockBean
+    private MailService mailService;
 
     private SkilledWorker worker;
     private Client client;

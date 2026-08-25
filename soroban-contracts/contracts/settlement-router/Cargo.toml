@@ -1,0 +1,22 @@
+[package]
+name = "guildworkman-settlement-router"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+soroban-sdk = { workspace = true }
+guildworkman-governance-guard = { path = "../governance-guard" }
+
+[dev-dependencies]
+soroban-sdk = { workspace = true, features = ["testutils"] }
+guildworkman-escrow = { path = "../escrow", features = ["testutils"] }
+guildworkman-reputation = { path = "../reputation", features = ["testutils"] }
+guildworkman-loyalty-token = { path = "../loyalty-token", features = ["testutils"] }
+
+[features]
+testutils = ["soroban-sdk/testutils"]

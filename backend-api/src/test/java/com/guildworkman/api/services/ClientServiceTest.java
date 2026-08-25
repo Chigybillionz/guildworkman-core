@@ -18,12 +18,14 @@ import com.guildworkman.api.dto.responses.UpdateSkilledWorkerResponse;
 import com.guildworkman.api.dto.responses.SkilledWorkerRegistrationResponse;
 import com.guildworkman.api.dto.responses.ViewAllAppointmentsResponse;
 import com.guildworkman.api.services.ServiceUtils.ClientService;
+import com.guildworkman.api.services.ServiceUtils.MailService;
 import com.guildworkman.api.services.ServiceUtils.SkilledWorkerService;
 import org.jetbrains.annotations.NotNull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.jdbc.Sql;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -51,6 +53,10 @@ public class ClientServiceTest {
     private SkilledWorkerService skilledWorkerService;
     @PersistenceContext
     private EntityManager entityManager;
+    // Booking an appointment now fans out a notification email; mocked so
+    // these tests never make a real call to the mail provider.
+    @MockBean
+    private MailService mailService;
 
     @BeforeEach
     public void setUp() {

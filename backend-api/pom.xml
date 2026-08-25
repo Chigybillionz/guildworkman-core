@@ -223,6 +223,32 @@
 						<stellar.signing.broadcast-poll-delay-ms>3600000</stellar.signing.broadcast-poll-delay-ms>
 						<stellar.signing.confirm-poll-delay-ms>3600000</stellar.signing.confirm-poll-delay-ms>
 						<stellar.signing.lease-sweep-delay-ms>3600000</stellar.signing.lease-sweep-delay-ms>
+						<!--
+						    Every distinct combination of @SpringBootTest properties/@MockBean
+						    set gets its own cached ApplicationContext (and its own HikariCP
+						    pool, default max size 10) for the rest of this test JVM's life;
+						    see the comment above on the scheduler delays for why contexts
+						    pile up rather than being torn down between classes. Left
+						    unbounded (Spring's own default cache size is 32), enough
+						    distinct contexts can be alive at once in this ~20-class suite to
+						    open more connections than the CI Postgres container allows
+						    (default max_connections=100), failing an unrelated test class's
+						    context startup with "sorry, too many clients already".
+
+						    Capping Hikari's own pool size per context was tried and reverted:
+						    SlotReservationIntegrationTest and EscrowOrchestrationIntegrationTest
+						    deliberately drive 8-12 concurrent threads against a single
+						    context to exercise real locking/idempotency behaviour, and
+						    shrinking that context's own pool starves them well before Hikari's
+						    default (10) would. The actual lever is how many *separate*
+						    contexts (and thus separate pools) can be alive at once, not how
+						    big any one of them is: bounding the test context cache means an
+						    old, no-longer-needed context (and its pool) is closed via LRU
+						    eviction before a new distinct one is created, capping the
+						    worst case at maxSize * Hikari's default pool size regardless of
+						    how many @SpringBootTest classes this suite grows to.
+						-->
+						<spring.test.context.cache.maxSize>6</spring.test.context.cache.maxSize>
 					</systemPropertyVariables>
 				</configuration>
 			</plugin>

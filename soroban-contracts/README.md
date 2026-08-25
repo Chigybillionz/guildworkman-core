@@ -3,7 +3,7 @@
 ![CI](https://github.com/workman-labs/guildworkman-contracts/actions/workflows/ci.yml/badge.svg)
 
 Soroban (Stellar) smart contracts for GuildWorkman, the skilled-worker booking
-marketplace. This workspace has five independent contracts:
+marketplace. This workspace has six independent contracts:
 
 | Contract | Path | Purpose |
 |---|---|---|
@@ -11,8 +11,9 @@ marketplace. This workspace has five independent contracts:
 | `reputation` | `contracts/reputation` | Stores one immutable review per completed appointment and keeps a running rating aggregate per skilled worker. |
 | `loyalty-token` | `contracts/loyalty-token` | A SEP-41-style fungible token used to reward clients/workers with points on completed appointments. Only a designated `minter` (the backend's service account) can mint. |
 | `loyalty-emissions` | `contracts/loyalty-emissions` | An emission engine that owns the `loyalty-token`'s `minter` role. Instead of minting rewards in a lump sum, it streams them out of per-account linear vesting schedules, throttled by per-account and global rate limits, and lets the admin reclaim allocations left unclaimed past a deadline. |
+| `settlement-router` | `contracts/settlement-router` | Orchestrates `escrow`, `reputation` and `loyalty-token` atomically: a single `settle` call releases escrowed funds, records the client's attestation, and mints loyalty points, or none of it happens. Becomes the sole trust root `reputation`/`loyalty-token` accept a settlement from once wired in — see [settlement-router](#settlement-router). |
 | `dispute-resolution` | `contracts/dispute-resolution` | Decentralized alternative to `escrow`'s single-admin arbitration: resolves a dispute via a **staked jury** using **commit-reveal** voting, then pays the majority out of the slashed stakes of the minority and no-shows. |
-| `governance-guard` | `contracts/governance-guard` | Not a deployed contract — a shared library that four of the contracts above (all except `dispute-resolution`) depend on, providing the multi-sig upgrade/migration pattern described in [Upgrade governance](#upgrade-governance). |
+| `governance-guard` | `contracts/governance-guard` | Not a deployed contract — a shared library that five of the contracts above (all except `dispute-resolution`) depend on, providing the multi-sig upgrade/migration pattern described in [Upgrade governance](#upgrade-governance). |
 
 These mirror the domain already implemented server-side in the backend
 ([`../backend-api`](../backend-api): `AppointmentService`, `ReviewService`,
@@ -81,13 +82,22 @@ intended flow, if/when integrated, looks like:
    `loyalty-emissions.create_schedule` and lets the recipient `claim` the
    stream as it vests (see [loyalty-emissions](#loyalty-emissions)).
 
+Steps 2-4 can instead collapse into a single call once `settlement-router` is
+deployed and wired in (see [settlement-router](#settlement-router)): the
+backend (or the client's own wallet) calls `settlement-router.settle` once,
+which atomically drives `escrow.confirm_completion`,
+`reputation.submit_attestation` and `loyalty-token.mint` — funds, review and
+reward land together or not at all, and neither `reputation` nor
+`loyalty-token` will accept a write from anywhere else once that wiring is
+in place.
+
 This requires the backend to hold a Stellar keypair per role (or per user, if
 going non-custodial) and a Soroban RPC client — none of that exists in
 `backend-api/` today.
 
 ## Upgrade governance
 
-All four contracts can have their code swapped in place via Soroban's
+All five contracts can have their code swapped in place via Soroban's
 `update_current_contract_wasm`, gated behind an M-of-N multi-sig — set once
 at `initialize` via a `signers: Vec<Address>` + `threshold: u32` — instead of
 being controlled by a single key or left permanently immutable. The pattern
@@ -139,7 +149,7 @@ in one pass. Left as a deliberate follow-up rather than rushed in here.
 Each contract's per-error-code table below lists the governance error
 variants it inherited from `governance-guard`, at whatever numeric offset
 came next in that contract's existing `Error` enum — the variant names are
-identical across all four, only the numbers differ.
+identical across all five, only the numbers differ.
 
 ## Emergency circuit breaker
 
@@ -149,7 +159,7 @@ Jump to: [Pause authorization](#pause-authorization) ·
 [Which clock](#which-clock) · [Hot-path cost](#hot-path-cost) ·
 [Pausing from the CLI](#pausing-from-the-cli)
 
-The same four contracts can be **paused** during an incident. The primitive
+The same five contracts can be **paused** during an incident. The primitive
 lives in `contracts/governance-guard`'s `pausable` module, next to the
 upgrade guard and for the same reason: every contract that needs it already
 depends on that crate.
@@ -163,7 +173,7 @@ freezing the contract:
 | Scope | Bit | Meaning | Guarded entrypoints |
 |---|---|---|---|
 | `SCOPE_INTAKE` | `1` | New value or new obligations entering the system | `escrow`: `create_appointment`, `create_milestone_escrow`, `add_milestone` · `loyalty-token`: `mint` · `loyalty-emissions`: `create_schedule` |
-| `SCOPE_SETTLEMENT` | `2` | Discretionary happy-path payouts | `escrow`: `confirm_completion`, `approve_milestone`, `release_milestone_funds` · `loyalty-emissions`: `claim` |
+| `SCOPE_SETTLEMENT` | `2` | Discretionary happy-path payouts | `escrow`: `confirm_completion`, `approve_milestone`, `release_milestone_funds` · `loyalty-emissions`: `claim` · `settlement-router`: `settle` |
 | `SCOPE_ATTESTATION` | `4` | Reputation writes | `reputation`: `submit_attestation` |
 
 `ALL_SCOPES` (`7`) is all three. A contract with no entrypoint in some scope
@@ -221,7 +231,7 @@ who places a pause and then goes offline cannot wedge it in place.
 
 #### Pause entrypoints
 
-Added to all four contracts:
+Added to all five contracts:
 
 - `pause(caller: Address, scopes: u32, duration_secs: u64, reason: String) -> PauseState`
 - `unpause(caller: Address, scopes: u32) -> u32` — clears only the named
@@ -308,13 +318,13 @@ not wait for an event that will never come.
 Five variants per contract, at whatever offset came next in that
 contract's existing `Error` enum — identical names, different numbers:
 
-| Variant | `escrow` | `reputation` | `loyalty-token` | `loyalty-emissions` | Meaning |
-|---|---|---|---|---|---|
-| `OperationPaused` | 37 | 29 | 24 | 30 | The entrypoint's scope is currently halted. A dedicated variant rather than a reused `InvalidStatus`: "the protocol is halted, retry later" and "this request was never valid" call for opposite reactions from a client. |
-| `InvalidPauseScope` | 38 | 30 | 25 | 31 | The scope mask was empty or contained bits outside `ALL_SCOPES`. Empty is rejected rather than treated as a no-op — during an incident a mask that halts nothing is a mistake the operator wants to hear about. |
-| `InvalidPauseDuration` | 39 | 31 | 26 | 32 | The duration was `0` or exceeded `MAX_PAUSE_DURATION`. |
-| `NotPaused` | 40 | 32 | 27 | 33 | `unpause` with nothing in effect, including a record that already auto-expired. |
-| `InvalidPauseReason` | 41 | 33 | 28 | 34 | The `reason` exceeded `MAX_PAUSE_REASON_LEN` (64 bytes). |
+| Variant | `escrow` | `reputation` | `loyalty-token` | `loyalty-emissions` | `settlement-router` | Meaning |
+|---|---|---|---|---|---|---|
+| `OperationPaused` | 37 | 29 | 24 | 30 | 23 | The entrypoint's scope is currently halted. A dedicated variant rather than a reused `InvalidStatus`: "the protocol is halted, retry later" and "this request was never valid" call for opposite reactions from a client. |
+| `InvalidPauseScope` | 38 | 30 | 25 | 31 | 24 | The scope mask was empty or contained bits outside `ALL_SCOPES`. Empty is rejected rather than treated as a no-op — during an incident a mask that halts nothing is a mistake the operator wants to hear about. |
+| `InvalidPauseDuration` | 39 | 31 | 26 | 32 | 25 | The duration was `0` or exceeded `MAX_PAUSE_DURATION`. |
+| `NotPaused` | 40 | 32 | 27 | 33 | 26 | `unpause` with nothing in effect, including a record that already auto-expired. |
+| `InvalidPauseReason` | 41 | 33 | 28 | 34 | 27 | The `reason` exceeded `MAX_PAUSE_REASON_LEN` (64 bytes). |
 
 A non-signer calling `pause`/`unpause` gets the existing `NotASigner`.
 
@@ -410,15 +420,15 @@ stellar contract invoke --id $ESCROW --source signer1 --network testnet \
 ```
 
 **Broadcasting to every contract.** The scope vocabulary is shared, so one
-mask goes to all four — including `reputation`, which has no intake
+mask goes to all five — including `reputation`, which has no intake
 entrypoint, since a scope a contract doesn't use is a no-op rather than an
-error. The four are separate deployments with separate storage, so this is
+error. The five are separate deployments with separate storage, so this is
 N transactions, not one: they needn't land in the same ledger, and a partial
 sweep is a valid state rather than a corrupt one, because each contract's
 guard reads only its own record. `scripts/broadcast-pause.sh` does the sweep:
 
 ```sh
-export ESCROW=… REPUTATION=… LOYALTY_TOKEN=… LOYALTY_EMISSIONS=…
+export ESCROW=… REPUTATION=… LOYALTY_TOKEN=… LOYALTY_EMISSIONS=… SETTLEMENT_ROUTER=…
 SIGNER=my-key ./scripts/broadcast-pause.sh pause 7 21600 "INC-412 triage"
 SIGNER=my-key ./scripts/broadcast-pause.sh status
 SIGNER=my-key ./scripts/broadcast-pause.sh unpause 1
@@ -549,7 +559,19 @@ Each contract has unit tests under `contracts/<name>/src/test.rs` using
   schedule params, reclaim-before-vesting-end, double-claim, double-reclaim,
   claiming a missing/reclaimed schedule, and looping claims across many windows
   never mints more than a schedule's `total`.
-- **dispute-resolution** (28 tests): the full commit → reveal → resolve →
+- **settlement-router** (14 tests): a `settle` call atomically releases
+  escrowed funds, records the attestation, and mints loyalty to both parties
+  in one deployment wiring real `escrow`/`reputation`/`loyalty-token`
+  contracts together; a replay is rejected without a double release or mint;
+  settling an appointment that isn't `Funded` (missing, already completed
+  outside the router, cancelled, disputed) is rejected before any
+  cross-contract call; a pause on either sub-contract — or on the router's
+  own `SCOPE_SETTLEMENT` — reverts the whole invocation with nothing
+  committed; a negative `RewardConfig` is rejected at `initialize` and at
+  `set_reward_config`; a `0` reward skips that party's mint; and
+  `reputation.submit_attestation` rejects a direct caller lacking the
+  configured router's own authorization once `set_router` is wired in.
+- **dispute-resolution** (27 tests): the full commit → reveal → resolve →
   withdraw lifecycle pays a plaintiff- or defendant-majority jury out of the
   losers' stakes; a no-show who committed but never revealed is slashed and
   their stake flows to the winners; a tie or a below-quorum turnout refunds
@@ -580,7 +602,8 @@ stellar contract invoke \
 ```
 
 Repeat `deploy` for `guildworkman_reputation.wasm`,
-`guildworkman_loyalty_token.wasm`, `guildworkman_loyalty_emissions.wasm`, and
+`guildworkman_loyalty_token.wasm`, `guildworkman_loyalty_emissions.wasm`,
+`guildworkman_settlement_router.wasm`, and
 `guildworkman_dispute_resolution.wasm`, then call each contract's `initialize`
 once. For the emission engine to be
 able to mint, point it at the token in its `initialize` and then hand it the
@@ -594,6 +617,26 @@ stellar contract invoke --id $EMISSIONS --source admin --network testnet \
 # Hand the token's minter role to the emissions contract.
 stellar contract invoke --id $LOYALTY --source admin --network testnet \
   -- set_minter --new_minter $EMISSIONS
+```
+
+To wire `settlement-router` in instead (see
+[settlement-router](#settlement-router) for the full "Deploying under
+partial rollout" order — this re-points `minter` away from
+`loyalty-emissions` above, so pick one mint authority per deployment):
+
+```sh
+stellar contract invoke --id $ROUTER --source admin --network testnet \
+  -- initialize --admin $ADMIN_ADDR --escrow $ESCROW --reputation $REPUTATION \
+     --loyalty_token $LOYALTY --reward_config '{ "client_reward": "50", "worker_reward": "100" }' \
+     --governance_init '{"signers":["'$SIGNER_1'","'$SIGNER_2'","'$SIGNER_3'"],"threshold":2}'
+
+# Hand the token's minter role to the router.
+stellar contract invoke --id $LOYALTY --source admin --network testnet \
+  -- set_minter --new_minter $ROUTER
+
+# Reputation only accepts an attestation the router vouches for from here on.
+stellar contract invoke --id $REPUTATION --source admin --network testnet \
+  -- set_router --router $ROUTER
 ```
 
 ## Contract interfaces
@@ -694,6 +737,14 @@ stellar contract invoke --id $ESCROW --source admin --network testnet \
 > surface described in
 > [Emergency circuit breaker](#emergency-circuit-breaker) — see the source
 > and `src/test.rs` for the actual current interface.
+>
+> This PR adds one more piece on top of that already-drifted interface:
+> `set_router(router: Address)` (admin-only) and `get_router() -> Option<Address>`.
+> Once a router is set, `submit_attestation` additionally requires that
+> router's own authorization alongside the client's — see
+> [settlement-router](#settlement-router) for why, and for the `Router`
+> storage key this adds (instance, holds an `Option<Address>`, defaults
+> unset).
 
 - `submit_review(appointment_id: u64, client: Address, worker: Address, rating: u32, comment: String)` — 1-5 stars, one review per `appointment_id`
 - `get_rating(worker: Address) -> Rating { count, sum }`
@@ -948,6 +999,143 @@ stellar contract invoke --id $EMISSIONS --source admin --network testnet \
   -- reclaim --beneficiary $WORKER_ADDR
 ```
 
+### settlement-router
+
+Orchestrates `escrow`, `reputation` and `loyalty-token` atomically. Before
+this contract, those three were independent doors: `escrow::confirm_completion`
+released funds and stopped there; `reputation::submit_attestation` accepted
+*any* `appointment_id` with no proof it was ever funded or completed;
+`loyalty-token::mint` trusted whichever address held the `minter` role. A
+client could review a worker for an appointment that never happened, and
+loyalty points were only as trustworthy as the backend's private key.
+
+A single `settle(appointment_id, rating, attestation_hash)` call now proves
+the appointment is `Funded` in `escrow`, then drives all three effects in one
+transaction: any `Err` from a sub-contract call — or a pause on its side —
+aborts the whole invocation, so a completed appointment settles as one
+indivisible unit (funds released, review recorded, loyalty minted) or none
+of it happens.
+
+- `initialize(admin: Address, escrow: Address, reputation: Address, loyalty_token: Address, reward_config: RewardConfig, governance_init: GovernanceInit)` —
+  `reward_config` is `{ client_reward: i128, worker_reward: i128 }`, the
+  fixed loyalty amounts minted on settlement (never taken from a `settle`
+  caller's own arguments)
+- `settle(appointment_id: u64, rating: u32, attestation_hash: BytesN<32>) -> ()` —
+  **permissionless caller**; the appointment's `client` must still authorize
+  the nested `escrow.confirm_completion` and `reputation.submit_attestation`
+  calls (see "Authorization" below)
+- `set_contracts(escrow: Address, reputation: Address, loyalty_token: Address)` — admin-only
+- `set_reward_config(reward_config: RewardConfig)` — admin-only
+- `is_settled(appointment_id: u64) -> bool`, `get_admin() -> Address`,
+  `get_escrow() -> Address`, `get_reputation() -> Address`,
+  `get_loyalty_token() -> Address`, `get_reward_config() -> RewardConfig` — read-only views
+- `propose_upgrade`, `approve_upgrade`, `cancel_upgrade`, `migrate`, `get_signers`, `get_upgrade_threshold`, `get_pending_upgrade`, `get_storage_version` — see [Upgrade governance](#upgrade-governance)
+- `pause`, `unpause`, `get_pause_state`, `paused_scopes`, `is_paused` — see [Emergency circuit breaker](#emergency-circuit-breaker); only `SCOPE_SETTLEMENT` has teeth here (guards `settle`) — this router defines no scope of its own, since every effect it produces flows through a guard the sub-contract already enforces
+
+#### Deploying under partial rollout
+
+Wiring this router in is an ordered rollout, not a single flag flip, because
+a paused or unreachable sub-contract fails the whole `settle` call:
+
+1. Deploy this contract via `initialize`, pointing it at the already-deployed
+   `escrow`, `reputation` and `loyalty-token` addresses.
+2. `loyalty_token.set_minter(router_address)` — `loyalty-emissions`, if
+   deployed, loses mint access at this point.
+3. `reputation.set_router(router_address)` — the step that actually closes
+   the "any `appointment_id`" hole; direct `submit_attestation` calls that
+   omit the router's authorization stop working the instant this lands.
+4. Point front ends at `settle` instead of calling `escrow.confirm_completion`
+   directly — that entrypoint still works standalone (by design; see
+   `escrow`'s own docs on why fund-recovery-adjacent paths stay
+   permissionless) but bypasses the reputation/loyalty side effects.
+
+#### Authorization
+
+`settle` itself calls no `require_auth` — it is a permissionless relay, the
+same pattern `escrow::release_milestone_funds` uses. The authorizations it
+depends on (the appointment's `client`, required by the nested
+`escrow.confirm_completion` and `reputation.submit_attestation` calls) must
+already be present in the submitted transaction. Client-side tooling should
+simulate and sign against the `settle` entrypoint specifically, so the
+resulting authorization entry's root invocation is `settle`, with
+`confirm_completion` and `submit_attestation` as sub-invocations — that is
+what binds the signature to the whole atomic settlement.
+
+Reward amounts are fixed by the admin in `RewardConfig` and never taken from
+`settle`'s own arguments; letting a caller name their own mint amount would
+turn `settle` into an unbounded mint.
+
+#### Idempotency
+
+`DataKey::Settled(appointment_id)` is written before any cross-contract call
+is made (checks-effects-interactions, mirroring
+`escrow::release_milestone_funds`). A replayed `settle` for the same
+`appointment_id` is rejected before touching any other contract. This is
+defense in depth, not the only guard — `escrow::confirm_completion` itself
+refuses a second call once the appointment is no longer `Funded`.
+
+#### Storage layout
+
+| `DataKey` variant | Storage | Holds |
+|---|---|---|
+| `Admin` | instance | The admin `Address`; configures contract addresses and `RewardConfig`. |
+| `Escrow` / `Reputation` / `LoyaltyToken` | instance | The three contracts this router orchestrates. |
+| `RewardConfig` | instance | `RewardConfig { client_reward, worker_reward }`, the fixed loyalty mint amounts per settlement. |
+| `Settled(u64)` | persistent | A `bool` flag per `appointment_id`, written before any cross-contract call. |
+
+#### Errors
+
+| Variant | Code | Meaning |
+|---|---|---|
+| `AlreadyInitialized` | 1 | `initialize` called more than once. |
+| `NotInitialized` | 2 | A method needing state was called before `initialize`. |
+| `InvalidRewardConfig` | 3 | A negative `client_reward`/`worker_reward` passed to `initialize`/`set_reward_config`. |
+| `AlreadySettled` | 4 | `settle` called again for an `appointment_id` already settled. |
+| `AppointmentNotFunded` | 5 | The appointment `escrow` reports is not currently `Funded` (missing, already completed, cancelled, or disputed). |
+| `GovernanceAlreadyInitialized` | 6 | `initialize` called more than once (surfaced via the governance guard). |
+| `GovernanceNotInitialized` | 7 | A governance call before `initialize`. |
+| `InvalidThreshold` | 8 | `threshold` is `0` or exceeds the number of signers. |
+| `DuplicateSigner` | 9 | The same address appears twice in `signers`. |
+| `NotASigner` | 10 | `propose_upgrade`/`approve_upgrade`/`cancel_upgrade`/`migrate` called by a non-signer. |
+| `NoPendingUpgrade` | 11 | `approve_upgrade`/`cancel_upgrade` with nothing proposed. |
+| `AlreadyApproved` | 12 | The same signer approving the same proposal twice. |
+| `ProposalExpired` | 13 | `approve_upgrade` more than ~7 days after `propose_upgrade`. |
+| `HashMismatch` | 14 | `approve_upgrade` with a hash that doesn't match the pending proposal. |
+| `AlreadyMigrated` | 15 | `migrate` targeting a version already applied or behind the current one. |
+| `NothingToMigrate` | 16 | `migrate` called when the stored version is already current. |
+
+Codes 17-22 (signer rotation) are documented in `src/lib.rs`; codes 23-27 are
+the circuit breaker's, listed in
+[Emergency circuit breaker](#emergency-circuit-breaker).
+
+`settle` itself never returns any `escrow`/`reputation`/`loyalty-token` error
+value — a sub-contract's `Err`, or a pause on its side, always panics the
+whole transaction (see the crate's own docs for why: any non-`try_`
+cross-contract call does this by construction, which is exactly what makes
+the settlement atomic).
+
+#### CLI usage
+
+```sh
+# One-time setup (see "Deploying under partial rollout" above for the full
+# wiring order, including set_minter / set_router on the sub-contracts).
+stellar contract invoke --id $ROUTER --source admin --network testnet \
+  -- initialize --admin $ADMIN_ADDR --escrow $ESCROW --reputation $REPUTATION \
+     --loyalty_token $LOYALTY --reward_config '{ "client_reward": "50", "worker_reward": "100" }' \
+     --governance_init '{"signers":["'$SIGNER_1'","'$SIGNER_2'","'$SIGNER_3'"],"threshold":2}'
+
+# Atomically release funds, record the attestation, and mint loyalty.
+stellar contract invoke --id $ROUTER --source client --network testnet \
+  -- settle --appointment_id 1 --rating 5 \
+     --attestation_hash 0000000000000000000000000000000000000000000000000000000000000000
+
+# Read-only views.
+stellar contract invoke --id $ROUTER --source admin --network testnet \
+  -- is_settled --appointment_id 1
+stellar contract invoke --id $ROUTER --source admin --network testnet \
+  -- get_reward_config
+```
+
 ### dispute-resolution
 
 > ⚠️ **v1, unaudited, no appeals** — single-round staked-jury voting with no sybil-resistant/weighted jury selection. Read [Security considerations / known limitations](#security-considerations--known-limitations) before integrating.
@@ -1118,6 +1306,22 @@ stellar contract invoke --id $DISPUTES --source juror --network testnet \
   verified against its documented behavior rather than exercised live. A
   testnet deploy-and-upgrade dry run is the natural next verification step
   before this ships anywhere real funds move through.
+- **`settlement-router` fails shut, not open.** `settle` makes plain
+  (non-`try_`) cross-contract calls, so a paused `reputation`/`loyalty-token`,
+  or one simply not yet wired to trust this router
+  (`reputation.set_router`/`loyalty_token.set_minter`), aborts the whole
+  settlement rather than degrading to "release funds anyway." That is the
+  intended atomicity trade-off, but it does mean a completed appointment's
+  payout is gated on infrastructure — two other contracts' liveness and
+  correct configuration — that `escrow.confirm_completion` alone never
+  depended on. Operators should treat the "Deploying under partial rollout"
+  sequencing in [settlement-router](#settlement-router) as load-bearing, not
+  optional ordering advice.
+- **Router reward amounts are fixed, not proportional.** `RewardConfig`'s
+  `client_reward`/`worker_reward` are flat amounts set once by the router's
+  admin, unrelated to the appointment's escrowed `amount`. A protocol that
+  wants loyalty proportional to spend needs that logic added explicitly —
+  it is not inferred from escrow state today.
 - **Comments are not authenticated content.** `reputation`'s `comment` field
   is an arbitrary `String` supplied by the reviewer with no length cap or
   content moderation — treat it as untrusted user input wherever it's
@@ -1163,6 +1367,12 @@ stellar contract invoke --id $DISPUTES --source juror --network testnet \
 - Real dispute resolution for `escrow` beyond a single admin call, and a
   genuine storage migration exercising `migrate`'s version-transform path
   (nothing has needed one yet — every contract is still on storage version 1).
+- `settlement-router` is deployed and tested but not called from
+  `backend-api/` yet, same as everything else in
+  [Suggested backend integration](#suggested-backend-integration-not-yet-wired-in) —
+  wiring it in requires re-pointing `loyalty-token`'s `minter` and
+  `reputation`'s router away from whatever (if anything) currently holds
+  those roles, per its own "Deploying under partial rollout" notes.
 
 ## License
 

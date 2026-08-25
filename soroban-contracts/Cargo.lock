@@ -773,6 +773,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "guildworkman-settlement-router"
+version = "0.1.0"
+dependencies = [
+ "guildworkman-escrow",
+ "guildworkman-governance-guard",
+ "guildworkman-loyalty-token",
+ "guildworkman-reputation",
+ "soroban-sdk",
+]
+
+[[package]]
 name = "hash32"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

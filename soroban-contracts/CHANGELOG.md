@@ -16,6 +16,38 @@ sections start once something ships.
 
 ### Added
 
+- **Cross-contract settlement router with auth-chained escrow → reputation →
+  loyalty atomicity** ([#38](https://github.com/workman-labs/guildworkman-core/issues/38),
+  [PR #50](https://github.com/workman-labs/guildworkman-core/pull/50)).
+  A new `contracts/settlement-router` crate that atomically drives escrow
+  release, reputation attestation, and loyalty emission from a single
+  `settle(appointment_id, rating, attestation_hash)` call, so a completed
+  appointment settles as one indivisible unit instead of three independently
+  callable — and independently spoofable — entrypoints:
+  - `settle` proves the appointment is `Funded` in `escrow` before doing
+    anything else, then calls `escrow.confirm_completion`,
+    `reputation.submit_attestation`, and `loyalty-token.mint` in one
+    transaction. Any `Err` from a sub-contract, or a pause on its side,
+    panics the whole invocation — nothing partially commits.
+  - **Idempotent per `appointment_id`**, checked before any cross-contract
+    call and enforced twice over: this router's own `Settled` marker, and
+    `escrow.confirm_completion` independently refusing a second call once
+    the appointment is no longer `Funded`.
+  - `reputation` gains an opt-in `set_router`/`get_router` (admin-only).
+    Once set, `submit_attestation` additionally requires that router's own
+    authorization alongside the client's — closing the previous gap where
+    any `appointment_id` could be attested with no proof it was ever funded
+    or completed. A contract address can only satisfy that requirement by
+    directly executing the call, so this cannot be forged by an
+    externally-owned account.
+  - `loyalty-token.mint` needs no code change: pointing its existing
+    `minter` role at this router (`set_minter`) is what gates it, the same
+    migration `loyalty-emissions` already models.
+  - Reward amounts are a fixed, admin-configured `RewardConfig` — never
+    taken from a `settle` caller's own arguments, so a caller cannot name
+    their own mint amount.
+  - Guarded by the existing shared `SCOPE_SETTLEMENT` (no new scope
+    introduced); see [Emergency circuit breaker](README.md#emergency-circuit-breaker).
 - **Emergency circuit breaker across `escrow`, `reputation`, `loyalty-token`
   and `loyalty-emissions`** ([#42](https://github.com/workman-labs/guildworkman-core/issues/42),
   [PR #46](https://github.com/workman-labs/guildworkman-core/pull/46)). A shared pausability primitive in

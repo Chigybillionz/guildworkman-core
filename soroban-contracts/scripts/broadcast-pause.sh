@@ -3,7 +3,7 @@
 # Broadcast an emergency pause (or lift one) across every GuildWorkman
 # contract that carries the circuit breaker.
 #
-# The four contracts are separate deployments with separate storage, so this
+# The five contracts are separate deployments with separate storage, so this
 # is N transactions, not one. They do not have to land in the same ledger and
 # nothing breaks if they land out of order or if one fails — each contract's
 # guard reads only its own record. That also means a partial sweep is a
@@ -16,7 +16,7 @@
 #   7  ALL_SCOPES
 #
 # A scope a given contract has no entrypoints for is a well-formed no-op, so
-# the same mask goes to all four without special-casing.
+# the same mask goes to all five without special-casing.
 #
 # Fund-recovery paths are NEVER affected by any mask: escrow refunds and
 # disputes, token transfer/transfer_from/burn of held balances, and every
@@ -31,7 +31,7 @@
 #   SIGNER      stellar-cli key name or secret; must be a governance signer
 #               on each contract it is used against
 #   NETWORK     defaults to testnet
-#   ESCROW, REPUTATION, LOYALTY_TOKEN, LOYALTY_EMISSIONS
+#   ESCROW, REPUTATION, LOYALTY_TOKEN, LOYALTY_EMISSIONS, SETTLEMENT_ROUTER
 #               contract ids; any left unset is skipped with a warning
 #
 # Note each contract has its OWN governance signer set. If they differ, run
@@ -57,7 +57,7 @@ fi
 
 targets() {
   local name id
-  for name in ESCROW REPUTATION LOYALTY_TOKEN LOYALTY_EMISSIONS; do
+  for name in ESCROW REPUTATION LOYALTY_TOKEN LOYALTY_EMISSIONS SETTLEMENT_ROUTER; do
     id="${!name:-}"
     if [[ -z "$id" ]]; then
       echo "warning: $name is unset — skipping" >&2
@@ -78,7 +78,7 @@ case "$ACTION" in
     DURATION="${3:?usage: pause <scopes> <duration_secs> [reason]}"
     REASON="${4:-}"
     # MAX_PAUSE_DURATION is 7 days; the contract rejects anything longer, but
-    # failing here is friendlier than four rejected transactions.
+    # failing here is friendlier than five rejected transactions.
     if (( DURATION <= 0 || DURATION > 604800 )); then
       echo "error: duration must be 1..604800 seconds (7 days)" >&2
       exit 2

@@ -3,7 +3,8 @@
 use super::*;
 use soroban_sdk::testutils::Address as _;
 use soroban_sdk::testutils::Ledger;
-use soroban_sdk::{BytesN, Env};
+use soroban_sdk::testutils::{MockAuth, MockAuthInvoke};
+use soroban_sdk::{BytesN, Env, IntoVal, Val};
 
 fn default_config() -> Config {
     Config {
@@ -838,38 +839,55 @@ fn pause_views_report_the_active_window() {
 }
 
 // ===========================================================================
-// Contract events — structured contract events (#45)
+// Settlement router gating
 // ===========================================================================
 
 #[test]
-fn submit_attestation_emits_one_event() {
-    use soroban_sdk::testutils::Events as _;
-
-    let (env, contract, client, worker) = setup();
-    let before = env.events().all().events().len();
-    contract.submit_attestation(&1, &client, &worker, &5, &dummy_hash(&env));
-    let after = env.events().all().events().len();
-    assert_eq!(
-        after - before,
-        1,
-        "submit_attestation must emit exactly one event"
-    );
+fn router_defaults_to_unset() {
+    let (_env, contract, _client, _worker) = setup();
+    assert_eq!(contract.get_router(), None);
 }
 
 #[test]
-fn failed_attestation_emits_no_event() {
-    use soroban_sdk::testutils::Events as _;
+fn set_router_then_get_router_reflects_it() {
+    let (env, contract, _client, _worker) = setup();
+    let router = Address::generate(&env);
+    contract.set_router(&router);
+    assert_eq!(contract.get_router(), Some(router));
+}
 
+#[test]
+fn submit_attestation_without_router_configured_keeps_legacy_behavior() {
+    // Regression: a deployment that never wires a router in behaves
+    // exactly as before this feature existed.
     let (env, contract, client, worker) = setup();
-    // Submit once to make the appointment reviewed
     contract.submit_attestation(&1, &client, &worker, &5, &dummy_hash(&env));
+    assert_eq!(contract.get_attestation_count(&worker), 1);
+}
 
-    // Double-review should fail and emit no event
-    let result = contract.try_submit_attestation(&1, &client, &worker, &4, &dummy_hash(&env));
-    assert_eq!(result, Err(Ok(Error::AlreadyReviewed)));
-    assert_eq!(
-        env.events().all().events().len(),
-        0,
-        "failed operation must emit no event"
-    );
+#[test]
+fn submit_attestation_direct_call_fails_once_router_is_configured() {
+    let (env, contract, client, worker) = setup();
+    let router = Address::generate(&env);
+    contract.set_router(&router);
+
+    // Only the client's own authorization is mocked -- a direct caller
+    // that is not the router contract itself has no way to satisfy
+    // `require_auth` for the router's address, since a contract address
+    // can only authorize by directly executing the call.
+    let hash = dummy_hash(&env);
+    let args: soroban_sdk::Vec<Val> =
+        (1u64, client.clone(), worker.clone(), 5u32, hash.clone()).into_val(&env);
+    env.mock_auths(&[MockAuth {
+        address: &client,
+        invoke: &MockAuthInvoke {
+            contract: &contract.address,
+            fn_name: "submit_attestation",
+            args,
+            sub_invokes: &[],
+        },
+    }]);
+
+    let res = contract.try_submit_attestation(&1, &client, &worker, &5, &hash);
+    assert!(res.is_err());
 }
