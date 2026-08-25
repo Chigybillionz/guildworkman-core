@@ -477,3 +477,32 @@ fn failed_transfer_emits_no_event() {
         "failed operation must emit no event"
     );
 }
+
+#[test]
+fn approve_emits_one_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    let spender = Address::generate(&env);
+    contract.approve(&user, &spender, &300, &100);
+    assert_eq!(
+        env.events().all().events().len(),
+        1,
+        "approve must emit exactly one event"
+    );
+}
+
+#[test]
+fn failed_approve_emits_no_event() {
+    use soroban_sdk::testutils::Events as _;
+
+    let (env, contract, _admin, _minter, user) = setup();
+    let spender = Address::generate(&env);
+    let res = contract.try_approve(&user, &spender, &-1, &100);
+    assert_eq!(res, Err(Ok(Error::InvalidAmount)));
+    assert_eq!(
+        env.events().all().events().len(),
+        0,
+        "failed operation must emit no event"
+    );
+}

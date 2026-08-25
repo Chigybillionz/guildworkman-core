@@ -469,9 +469,10 @@ contract but their order is not — index by key, not by position.
 | `Mint` | `"loyalty"`, `"mint"`, `to` | `amount` |
 | `Transfer` | `"loyalty"`, `"transfer"`, `from`, `to` | `amount` |
 | `Burn` | `"loyalty"`, `"burn"`, `from` | `amount` |
+| `Approve` | `"loyalty"`, `"approve"`, `from`, `spender` | `amount`, `expiration_ledger` |
 | `MinterRotated` | `"loyalty"`, `"minter_rotated"`, `old_minter`, `new_minter` | _(none)_ |
 
-`Transfer` and `Burn` follow SEP-41 conventions so standard wallet and
+`Transfer`, `Burn` and `Approve` follow SEP-41 conventions so standard wallet and
 indexer tooling recognizes them. `Mint` uses the same prefix pair for
 consistency but is not defined by SEP-41.
 

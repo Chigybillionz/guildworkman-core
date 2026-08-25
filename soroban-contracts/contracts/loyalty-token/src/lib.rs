@@ -65,6 +65,19 @@ pub struct MinterRotated {
     pub new_minter: Address,
 }
 
+/// SEP-41-compatible approve event. Topics: `["loyalty", "approve", from, spender]`;
+/// data carries the amount and expiration_ledger.
+#[contractevent(topics = ["loyalty", "approve"])]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Approve {
+    #[topic]
+    pub from: Address,
+    #[topic]
+    pub spender: Address,
+    pub amount: i128,
+    pub expiration_ledger: u32,
+}
+
 /// Bump when this contract's storage layout actually changes shape and
 /// needs a real transformation in `migrate`. There's no such change yet.
 const CURRENT_STORAGE_VERSION: u32 = 1;
@@ -412,7 +425,22 @@ impl LoyaltyToken {
         if amount < 0 {
             return Err(Error::InvalidAmount);
         }
-        Self::write_allowance(&env, from, spender, amount, expiration_ledger);
+        Self::write_allowance(
+            &env,
+            from.clone(),
+            spender.clone(),
+            amount,
+            expiration_ledger,
+        );
+
+        Approve {
+            from,
+            spender,
+            amount,
+            expiration_ledger,
+        }
+        .publish(&env);
+
         Ok(())
     }
 
